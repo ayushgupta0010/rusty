@@ -110,7 +110,13 @@ impl fmt::Display for Token<'_> {
             TokenKind::Equal => write!(f, "EQUAL"),
             TokenKind::String => write!(f, "STRING {origin} {}", Token::unescape(origin)),
             TokenKind::Ident => write!(f, "IDENTFIER {origin}"),
-            TokenKind::Number(n) => write!(f, "NUMBER {n}"),
+            TokenKind::Number(n) => {
+                if n == n.trunc() {
+                    write!(f, "NUMBER {n}.0")
+                } else {
+                    write!(f, "NUMBER {n}")
+                }
+            }
             TokenKind::And => write!(f, "AND"),
             TokenKind::Class => write!(f, "CLASS"),
             TokenKind::Else => write!(f, "ELSE"),

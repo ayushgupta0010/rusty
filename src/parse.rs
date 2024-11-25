@@ -427,80 +427,88 @@ impl<'de> Parser<'de> {
                 return Err(e).wrap_err("on left-hand side");
             }
         };
-        let mut lhs = match lhs {
-            // atoms
-            Token {
-                kind: TokenKind::String,
-                origin,
-                ..
-            } => TokenTree::Atom(Atom::String(Token::unescape(origin))),
-            Token {
-                kind: TokenKind::Number(n),
-                ..
-            } => TokenTree::Atom(Atom::Number(n)),
-            Token {
-                kind: TokenKind::True,
-                ..
-            } => TokenTree::Atom(Atom::Bool(true)),
-            Token {
-                kind: TokenKind::False,
-                ..
-            } => TokenTree::Atom(Atom::Bool(false)),
-            Token {
-                kind: TokenKind::Nil,
-                ..
-            } => TokenTree::Atom(Atom::Nil),
-            Token {
-                kind: TokenKind::Ident,
-                origin,
-                ..
-            } => TokenTree::Atom(Atom::Ident(origin)),
-            Token {
-                kind: TokenKind::Super,
-                ..
-            } => TokenTree::Atom(Atom::Super),
+        let mut lhs =
+            match lhs {
+                // atoms
+                Token {
+                    kind: TokenKind::String,
+                    origin,
+                    ..
+                } => TokenTree::Atom(Atom::String(Token::unescape(origin))),
+                Token {
+                    kind: TokenKind::Number(n),
+                    ..
+                } => TokenTree::Atom(Atom::Number(n)),
+                Token {
+                    kind: TokenKind::True,
+                    ..
+                } => TokenTree::Atom(Atom::Bool(true)),
+                Token {
+                    kind: TokenKind::False,
+                    ..
+                } => TokenTree::Atom(Atom::Bool(false)),
+                Token {
+                    kind: TokenKind::Nil,
+                    ..
+                } => TokenTree::Atom(Atom::Nil),
+                Token {
+                    kind: TokenKind::Ident,
+                    origin,
+                    ..
+                } => TokenTree::Atom(Atom::Ident(origin)),
+                Token {
+                    kind: TokenKind::Super,
+                    ..
+                } => TokenTree::Atom(Atom::Super),
 
-            Token {
-                kind: TokenKind::This,
-                ..
-            } => TokenTree::Atom(Atom::This),
+                Token {
+                    kind: TokenKind::This,
+                    ..
+                } => TokenTree::Atom(Atom::This),
 
-            // groups
-            Token {
-                kind: TokenKind::LeftParen,
-                ..
-            } => {
-                let lhs = self
-                    .parse_expression_within(0)
-                    .wrap_err("in bracketed expression")?;
-                self.lexer
-                    .expect(
-                        TokenKind::RightParen,
-                        "Unexpected end to bracketed expression",
-                    )
-                    .wrap_err("after bracketed expression")?;
-                TokenTree::Cons(Op::Group, vec![lhs])
-            }
+                // groups
+                Token {
+                    kind: TokenKind::LeftParen,
+                    ..
+                } => {
+                    let lhs = self
+                        .parse_expression_within(0)
+                        .wrap_err("in bracketed expression")?;
+                    self.lexer
+                        .expect(
+                            TokenKind::RightParen,
+                            "Unexpected end to bracketed expression",
+                        )
+                        .wrap_err("after bracketed expression")?;
+                    TokenTree::Cons(Op::Group, vec![lhs])
+                }
 
-            // unary prefix expressions
-            Token {
-                kind: TokenKind::Bang | TokenKind::Minus,
-                ..
-            } => {
-                let op = match lhs.kind {
-                    TokenKind::Bang => Op::Bang,
-                    TokenKind::Minus => Op::Minus,
-                    _ => unreachable!("by the outer match arm pattern"),
-                };
-                let ((), r_bp) = prefix_binding_power(op);
-                let rhs = self
-                    .parse_expression_within(r_bp)
-                    .wrap_err("in right-hand side")?;
-                TokenTree::Cons(op, vec![rhs])
-            }
+                // unary prefix expressions
+                Token {
+                    kind: TokenKind::Bang | TokenKind::Minus,
+                    ..
+                } => {
+                    let op = match lhs.kind {
+                        TokenKind::Bang => Op::Bang,
+                        TokenKind::Minus => Op::Minus,
+                        _ => unreachable!("by the outer match arm pattern"),
+                    };
+                    let ((), r_bp) = prefix_binding_power(op);
+                    let rhs = self
+                        .parse_expression_within(r_bp)
+                        .wrap_err("in right-hand side")?;
+                    TokenTree::Cons(op, vec![rhs])
+                }
 
-            t => panic!("bad token: {:?}", t),
-        };
+                token => return Err(miette::miette! {
+                    labels = vec![
+                        LabeledSpan::at(token.offset..token.offset + token.origin.len(), "here"),
+                    ],
+                    help = format!("Unexpected {token:?}"),
+                    "Expected an expression",
+                }
+                .with_source_code(self.whole.to_string())),
+            };
 
         loop {
             let op = self.lexer.peek();
@@ -651,7 +659,9 @@ pub enum Atom<'de> {
 impl fmt::Display for Atom<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Atom::String(s) => write!(f, "\"{s}\""),
+            // NOTE: this feels more correct
+            // Atom::String(s) => write!(f, "\"{s}\""),
+            Atom::String(s) => write!(f, "{s}"),
             Atom::Number(n) => {
                 if *n == n.trunc() {
                     // tests require that integers are printed as N.0
@@ -791,14 +801,14 @@ impl fmt::Display for TokenTree<'_> {
 fn prefix_binding_power(op: Op) -> ((), u8) {
     match op {
         Op::Print | Op::Return => ((), 1),
-        Op::Bang | Op::Minus => ((), 9),
+        Op::Bang | Op::Minus => ((), 11),
         _ => panic!("bad op: {:?}", op),
     }
 }
 
 fn postfix_binding_power(op: Op) -> Option<(u8, ())> {
     let res = match op {
-        Op::Call => (11, ()),
+        Op::Call => (13, ()),
         _ => return None,
     };
     Some(res)
@@ -808,9 +818,16 @@ fn infix_binding_power(op: Op) -> Option<(u8, u8)> {
     let res = match op {
         // '=' => (2, 1),
         // '?' => (4, 3),
-        Op::Plus | Op::Minus => (5, 6),
-        Op::Star | Op::Slash => (7, 8),
-        Op::Field => (14, 13),
+        Op::And | Op::Or => (3, 4),
+        Op::BangEqual
+        | Op::EqualEqual
+        | Op::Less
+        | Op::LessEqual
+        | Op::Greater
+        | Op::GreaterEqual => (5, 6),
+        Op::Plus | Op::Minus => (7, 8),
+        Op::Star | Op::Slash => (9, 10),
+        Op::Field => (16, 15),
         _ => return None,
     };
     Some(res)
